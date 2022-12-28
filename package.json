@@ -1,0 +1,28 @@
+{
+  "name": "yolobuilding",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "nodemon server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imMarcusKan/yoloBuilding.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/imMarcusKan/yoloBuilding/issues"
+  },
+  "homepage": "https://github.com/imMarcusKan/yoloBuilding#readme",
+  "dependencies": {
+    "express": "^4.18.2",
+    "listening-on": "^2.0.9",
+    "node-fetch": "^2.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20"
+  }
+}

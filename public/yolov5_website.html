@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="initial-scale=1,maximum-scale=1.0, user-scalable=no"
+    />
+
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.5.0/font/bootstrap-icons.css"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
+      crossorigin="anonymous"
+    />
+    <style></style>
+  </head>
+
+  <body>
+    <h2 style="text-align: center">常悅道</h2>
+    <h2 style="text-align: center; color: azure">(地產)</h2>
+    <h2 style="text-align: center">我睇哂</h2>
+    <h4 id="msgBox"></h4>
+
+    <div class="d-flex justify-content-center">
+      <canvas id="output" style="height: auto; width: 80vw"></canvas>
+    </div>
+
+    <div class="mt-2" style="text-align: center">
+      <button type="button" class="btn btn-dark" id="capBtn">Capture</button>
+    </div>
+
+    <video
+      id="video"
+      autoplay
+      style="
+        -webkit-transform: scaleX(-1);
+        transform: scaleX(-1);
+        visibility: hidden;
+        width: auto;
+        height: auto;
+      "
+    ></video>
+  </body>
+
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM"
+    crossorigin="anonymous"
+  ></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/stats-js@1.0.1/build/stats.min.js"></script>
+
+  <script>
+    /*
+        Step to run yolov5 model on your website (no server needed)
+        Thanks https://github.com/zldrobit/tfjs-yolov5-example for references
+        1. Train your model with yolov5
+        2. Save your best.pt weights to your pc
+        3. git the yolov5 to your pc if you have not done yet
+        - git clone https://github.com/ultralytics/yolov5
+        4. Run below comment in the yolov5 folder to export a tfjs model
+        - python export.py --weights <your weights.pt file> --include tfjs
+        e.g. python export.py --weights best.pt --include tfjs
+        5. At that point, you will have a folder holding the model.json and other weights files
+        6. Open a repository in github (NOT gitlab, is github), git push your folder to that repository
+        7. Your jsdelivr link should be like this
+        -  https://cdn.jsdelivr.net/gh/<your username>/<your respo>/<your model folder>/model.json
+        8. Change the modelUrlPath, imgSize, label by your own data
+        8. Done
+    */
+
+    // building List
+    const buildingListP = loadJson();
+
+    // model variables
+    let model;
+
+    // webCam
+    const video = document.querySelector("video");
+
+    // webCam display
+    const canvas = document.getElementById("output");
+    const ctx = canvas.getContext("2d");
+
+    // debugMessage
+    const debugMessage = document.getElementById("debugMessage");
+    console.log("Width:", window.innerWidth);
+    console.log("Height:", window.innerHeight);
+
+    const msgBox = document.getElementById("msgBox");
+
+    // stats library
+    const stats = new Stats();
+
+    const imgSize = 640;
+    // const modelUrlPath =
+    // ("https://cdn.jsdelivr.net/gh/imMarcusKan/yoloBuilding/public/best_web_model/model.json");
+    const modelUrlPath = "/public/best_web_model/model.json";
+    const scoreThras = 0.35; // score lower then that will not display
+
+    const labels = ["megabox", "enterprise", "newBright", "poHong", "flourish"];
+
+    let requestAnimationFrameCross =
+      window.webkitRequestAnimationFrame ||
+      window.requestAnimationFrame ||
+      window.mozRequestAnimationFrame ||
+      window.oRequestAnimationFrame ||
+      window.msRequestAnimationFrame;
+
+    async function getMedia() {
+      let stream = null;
+
+      let constraints = (window.constraints = {
+        audio: false,
+        video: {
+          facingMode: "environment",
+        },
+      });
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log(stream);
+
+        window.stream = stream;
+        video.srcObject = stream;
+      } catch (err) {
+        console.log(err);
+      }
+    }
+
+    // creata load model and active cameras
+    async function loadModel() {
+      model = await tf.loadGraphModel(modelUrlPath);
+
+      // Set up canvas w and h
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      enableCaptureScreen();
+
+      const buildingList = await buildingListP;
+      predictModel(buildingList);
+    }
+
+    function enableCaptureScreen() {
+      const capBtn = document.getElementById("capBtn");
+
+      capBtn.addEventListener("click", async () => {
+        let imgURL = canvas.toDataURL("image/png");
+
+        let dlLink = document.createElement("a");
+        dlLink.download = "fileName";
+        dlLink.href = imgURL;
+        dlLink.dataset.downloadurl = [
+          "image/png",
+          dlLink.download,
+          dlLink.href,
+        ].join(":");
+
+        document.body.appendChild(dlLink);
+        dlLink.click();
+        document.body.removeChild(dlLink);
+      });
+    }
+
+    async function predictModel(buildingList) {
+      stats.begin();
+
+      // Prevent memory leaks by using tidy
+      let imgPre = await tf.tidy(() => {
+        return tf.browser
+          .fromPixels(video)
+          .resizeNearestNeighbor([imgSize, imgSize])
+          .toFloat()
+          .div(tf.scalar(255.0))
+          .expandDims();
+      });
+
+      const result = await model.executeAsync(imgPre);
+
+      const font = "28px sans-serif";
+      ctx.font = font;
+      ctx.textBaseline = "top";
+
+      const [boxes, scores, classes, valid_detections] = result;
+      const boxes_data = boxes.dataSync();
+      const scores_data = scores.dataSync();
+      const classes_data = classes.dataSync();
+      const valid_detections_data = valid_detections.dataSync()[0];
+
+      // Prevent memory leaks also
+      await tf.dispose(result);
+      await tf.dispose(imgPre);
+      await tf.disposeVariables(result);
+
+      ctx.drawImage(video, 0, 0);
+
+      for (let i = 0; i < valid_detections_data; ++i) {
+        if (scores_data[i] <= scoreThras) {
+          continue;
+        }
+        if (!buildingList[i].data?.PostList?.TotalCount) {
+          continue;
+        }
+
+        //if
+
+        let [x1, y1, x2, y2] = boxes_data.slice(i * 4, (i + 1) * 4);
+
+        x1 *= canvas.width;
+        x2 *= canvas.width;
+        y1 *= canvas.height;
+        y2 *= canvas.height;
+
+        const width = x2 - x1;
+        const height = y2 - y1;
+        const klass = labels[classes_data[i]];
+        const score = scores_data[i].toFixed(2);
+
+        msgBox.innerHTML = klass;
+
+        // Draw the bounding box. (draw box)
+        ctx.strokeStyle = "#00FFFF";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(x1, y1, width, height);
+
+        // Draw the label background. (draw label bg)
+        ctx.fillStyle = "#00FFFF";
+        const textWidth = ctx.measureText(klass + ":" + score).width;
+        const textHeight = parseInt(font, 10); // base 10
+        // ctx.fillRect(x1, y1, textWidth + 4, textHeight + 4);
+
+        // Draw the text last to ensure it's on top. (draw label)
+        ctx.fillStyle = "#88ff00";
+        ctx.fillText(klass + ":" + score, x1, y1);
+
+        //if buildingList[i].data is not null, draw the label
+        let data = buildingList[i].data;
+        if (data) {
+          console.log("using data", i, data);
+          ctx.fillText(
+            `共有租盤${data.PostList.TotalCount}個`,
+            x1,
+            y1 + textHeight * 1.1
+          );
+          let price = 0;
+          let area = 0;
+          data.PostList.RecordList.forEach((record) => {
+            price += record.Retal;
+            area += record.Size;
+          });
+          let rate = (price / area).toFixed(2);
+          ctx.fillText(`avg價${rate}`, x1, y1 + textHeight * 2.2);
+          //draw the label, the fillText is buildingList[i].data.postList.length
+        }
+
+        try {
+          if (buildingList[i].data != null) {
+            continue;
+          }
+          ctx.fillText("共有租盤${}個", x1, y1 + 20);
+          ctx.fillText("約價${}", x1, y1 + 40);
+          //draw the label, the fillText is buildingList[i].data.postList.length
+        } catch (error) {
+          console.log(error);
+        }
+      }
+
+      stats.end();
+      requestAnimationFrameCross(() => predictModel(buildingList));
+    }
+
+    // video cam success load in
+    video.addEventListener("loadeddata", async () => {
+      console.log("Yay!");
+      loadModel();
+    });
+
+    // when dom success to load in
+    window.onload = async () => {
+      stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+      document.body.appendChild(stats.dom);
+      getMedia();
+    };
+
+    async function loadJson() {
+      const buildingList = [
+        {
+          name: "megabox",
+          chiName: "企業廣場5期",
+          centalineAPI: "",
+          midlandAPI:
+            "https://www.midlandici.com.hk/ics/property/stock/stockFilterJson?tx_type%5B%5D=L&keywords=%7B%22suggestionWord%22%3A%22%E4%BC%81%E6%A5%AD%E5%BB%A3%E5%A0%B45%E6%9C%9F1%E5%BA%A7%22%2C%22type%22%3A%22building%22%2C%22value%22%3A%22B000062009%22%2C%22ics%22%3A%22c%22%7D&page_size=12",
+          data: {
+            postList: {
+              RecordList: {},
+            },
+          },
+        },
+        {
+          name: "enterprise",
+          chiName: "企業廣場1期",
+          centalineAPI:
+            "https://oir.centanet.com/api/Post/GetPostList?sortBy=9&postType=1&rentType=0&Centabldg=2800423501&pageIndex=0&pageSize=10&est_type=2800423501-n&userID=ec69d251-25f2-4b84-ac84-3b4f6fa380c9&lang=TC",
+          midlandAPI:
+            "https://www.midlandici.com.hk/ics/property/stock/stockFilterJson?tx_type%5B%5D=L&keywords=%7B%22suggestionWord%22%3A%22%E4%BC%81%E6%A5%AD%E5%BB%A3%E5%A0%B41%E6%9C%9F%22%2C%22type%22%3A%22free_text%22%2C%22value%22%3A%22%E4%BC%81%E6%A5%AD%E5%BB%A3%E5%A0%B41%E6%9C%9F%22%2C%22ics%22%3A%22%22%7D&page_size=12",
+          data: {
+            postList: {
+              RecordList: {},
+            },
+          },
+        },
+        {
+          name: "newBright",
+          chiName: "新明大廈",
+          centalineAPI: "",
+          midlandAPI: "",
+          data: {
+            postList: {
+              RecordList: {},
+            },
+          },
+        },
+        {
+          name: "poHong",
+          chiName: "寶康中心",
+          centalineAPI:
+            "https://oir.centanet.com/api/Post/GetPostList?sortBy=9&postType=1&rentType=0&searchTxt=%E5%AF%B6%E5%BA%B7%E4%B8%AD%E5%BF%83&pageIndex=0&pageSize=10&userID=ec69d251-25f2-4b84-ac84-3b4f6fa380c9&lang=TC",
+          midlandAPI:
+            "https://www.midlandici.com.hk/ics/property/stock/stockFilterJson?tx_type%5B%5D=L&keywords=%7B%22suggestionWord%22%3A%22%E5%AF%B6%E5%BA%B7%E4%B8%AD%E5%BF%83%22%2C%22type%22%3A%22free_text%22%2C%22value%22%3A%22%E5%AF%B6%E5%BA%B7%E4%B8%AD%E5%BF%83%22%2C%22ics%22%3A%22%22%7D&last_clicked=I00017864&marked_cursor=1&page_size=1",
+          data: {
+            postList: {
+              RecordList: {},
+            },
+          },
+        },
+        {
+          name: "flourish",
+          chiName: "宏力工業大廈",
+          centalineAPI:
+            "https://oir.centanet.com/api/Post/GetPostList?sortBy=9&postType=1&rentType=0&Centabldg=2800402360&searchTxt=%E5%AE%8F%E5%8A%9B%E5%B7%A5%E6%A5%AD%E5%A4%A7%E5%BB%88&pageIndex=0&pageSize=10&est_type=2800402360-s&userID=ec69d251-25f2-4b84-ac84-3b4f6fa380c9&lang=TC",
+          midlandAPI:
+            "https://www.midlandici.com.hk/ics/property/stock/stockFilterJson?tx_type%5B%5D=L&keywords=%7B%22suggestionWord%22%3A%22%E5%AE%8F%E5%8A%9B%E5%B7%A5%E6%A5%AD%E5%A4%A7%E5%BB%88%22%2C%22type%22%3A%22free_text%22%2C%22value%22%3A%22%E5%AE%8F%E5%8A%9B%E5%B7%A5%E6%A5%AD%E5%A4%A7%E5%BB%88%22%2C%22ics%22%3A%22%22%7D&last_clicked=I00017864&marked_cursor=1&page_size=1",
+          data: {
+            postList: {
+              RecordList: {},
+            },
+          },
+        },
+      ];
+      // for loop to fetch all json by buildingList.centalineAPI
+      for (let i = 0; i < buildingList.length; i++) {
+        try {
+          if (!buildingList[i].centalineAPI) {
+            console.log("skip data load", i);
+            continue;
+          }
+          // https://oir.centanet.com
+          let list = [
+            ...(await loadCentalineAPI(buildingList[i].centalineAPI)),
+            ...(await loadMidlandiciAPI(buildingList[i].midlandAPI)),
+          ];
+          buildingList[i].data = {
+            PostList: {
+              TotalCount: list.length,
+              RecordList: list,
+            },
+          };
+          console.log("loaded data", i, list);
+        } catch (error) {
+          console.error("failed to load data", i, error);
+        }
+      }
+      console.log(buildingList);
+      //         const json = await fetch(`https://www.midlandici.com.hk/ics/property/stock/stockFilterJson?tx_type[]=L&keywords={"suggestionWord":"企業廣場1期","type":"free_text","value":"企業廣場1期","ics":""}&page_size=12`,
+      //          {method:"get",
+
+      // });
+      //         const data = await json.json();
+      //         // buildingList[0].data = data
+      //         console.log(data);
+
+      return buildingList;
+    }
+
+    async function loadCentalineAPI(url) {
+      if (!url) return [];
+      const res = await fetch(url);
+      const json = await res.json();
+      console.log(json);
+      let list = json.PostList.RecordList.map((item) => ({
+        Retal: item.Retal,
+        Size: item.Size,
+        PropertyName: item.PropertyName,
+        AdvNo: "CENT-" + item.AdvNo,
+        Address: item.Address,
+        Source: "Centaline",
+      }));
+      return list;
+    }
+
+    async function loadMidlandiciAPI(url) {
+      if (!url) return [];
+      let params = new URLSearchParams();
+      params.set("url", url);
+      const res = await fetch("/proxy?" + params);
+      const json = await res.json();
+      console.log(json);
+      let list = json.stocks.map((item) => ({
+        Retal: +item.rent,
+        Size: +item.area,
+        PropertyName: item.chi_name,
+        AdvNo: "MIDL-" + item.gstock_id,
+        Address: item.chi_addr_name,
+        Source: "Midlandici",
+      }));
+      return list;
+    }
+  </script>
+</html>
